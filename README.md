@@ -1,0 +1,3 @@
+A Bayesian vector autoregressive model to address missing data and prediction in precision beekeeping
+
+Authors: M. Carmen Robustillo, Lizbeth Naranjo, M. Isabel Parra, Carlos J. Perez
