@@ -6,9 +6,9 @@ Authors: M. Carmen Robustillo (1), Lizbeth Naranjo (2), M. Isabel Parra (3), Car
 
 (1) Universidad de Málaga, Spain. 
 
-(2) Departamento de Matematicas, Universidad de Extremadura, Caceres, Spain.
+(2) Departamento de Matematicas, Facultad de Ciencias, Universidad Nacional Autonoma de Mexico, Ciudad de Mexico, Mexico. 
 
-(3) Departamento de Matematicas, Facultad de Ciencias, Universidad Nacional Autonoma de Mexico, Ciudad de Mexico, Mexico. 
+(3) Departamento de Matematicas, Universidad de Extremadura, Caceres, Spain.
 
 Journal: 
 
