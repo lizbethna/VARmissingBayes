@@ -12,7 +12,15 @@ Authors: M. Carmen Robustillo (1), Lizbeth Naranjo (2), M. Isabel Parra (3), Car
 
 Journal: 
 
-Year: 
+Year: December 2025
+
+##--------------------------------------------------
+
+ABSTRACT:
+Precision beekeeping increasingly depends on sensor-based monitoring, yet these systems frequently generate incomplete multivariate time series due to connectivity interruptions or temporary hardware failures. These gaps highlight the importance of using statistical models that manage missing data, ensuring accurate predictions and timely interventions. This work proposes a Bayesian vector autoregressive model with exogenous variables that integrates imputation and forecasting in a unified probabilistic framework. Missing observations are treated as latent variables and estimated jointly with model parameters via Hamiltonian Monte Carlo, ensuring coherent uncertainty propagation and preserving the temporal structure of hive dynamics. A simulation study found that model parameter estimates remain stable across varying levels of missing data, with no significant differences compared to estimates from the no-missing-data scenario. When applied to real data from the BeeObserver project, the proposed approach provided comparable accuracy rates when imputing data with different proportions of missing values. Additionally, it provides reliable predictions for key beekeeping variables, achieving a mean absolute error in one (seven)-day forecast of less than 0.85 (2.3)$^\circ C$ for temperature, 3.2 (4)\% for humidity, and 420 (710) g for weight under a cross-validation procedure. The proposed approach thus provides a coherent probabilistic basis for integrating forecasting and data reconstruction in practical hive monitoring systems, supporting informed decision-making even in the presence of extended sensor outages. 
+
+Keywords:
+Bayesian statistics; Hamiltonian Monte Carlo; Missing data; Precision beekeeping; Sensor data; Time series prediction; Vector autoregressive model.
 
 ##--------------------------------------------------
 
@@ -30,12 +38,14 @@ Bee135 data (this is not the original dataset):
 - Bee135.txt
 
 VAR(p) model: 
-- Bee135_BVARX2_thw.Rmd; Bee135_BVARX2_thw.pdf; 
+- Bee135_BVARX2_thw.Rmd;
+- Bee135_BVARX2_thw.pdf; 
 - BVARX_p.stan
 
 
 VAR(p)-missing data model:
-- Bee135_BVARX2_missing_thw.Rmd; Bee135_BVARX2_missing_thw.pdf; 
+- Bee135_BVARX2_missing_thw.Rmd;
+- Bee135_BVARX2_missing_thw.pdf; 
 - BVARX_p_missing.stan 
 
 ##--------------------------------------------------
