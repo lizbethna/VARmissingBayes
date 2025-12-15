@@ -1,0 +1,286 @@
+---
+title: "BVARX(p)"
+author: "M. Carmen Robustillo, Lizbeth Naranjo, M. Isabel Parra, Carlos J. Perez"
+date: "December 2025"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+*A Bayesian vector autoregressive approach to address missing data and forecasting in precision beekeeping*
+
+# Bee 135 data
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(devtools)
+library(coda)
+library(rstan)
+library(vars)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, eval=TRUE,include=FALSE,results==FALSE}
+## change address in dir1="HERE" and setwd("HERE")
+dir1 = "~/Documents/Articulos/Abejas_MarkovSwitching/GitHub/" 
+setwd("~/Documents/Articulos/Abejas_MarkovSwitching/GitHub/") 
+
+dataBee <- read.csv(paste0(dir1,"Bee135.csv"), 
+                       row.names=NULL,header=TRUE,sep=";")
+## dim(data135)
+## head(data135)
+## summary(data135)
+
+dataBee <- as.data.frame(dataBee)
+
+### ---------- ---------- ---------- ---------- ----------
+### stational cicle habing dummies for factor
+
+dataBee$time1 <- as.POSIXct(strptime(dataBee$time,format="%Y-%m-%d %H:%M:%S"))
+## Separate day and time
+dataBee$day = as.Date(as.POSIXct(strptime(dataBee$time,format="%Y-%m-%d"))) 
+dataBee$hour = as.character(dataBee$time1)
+dataBee$hour = substr(dataBee$hour,12,13)
+dataBee$hour = as.numeric(dataBee$hour) 
+
+### order by day and hour 
+data135 = dataBee[order(dataBee$day,dataBee$hour),]
+data135 = as.data.frame(data135)
+
+data135$time2 <- difftime(as.POSIXct(data135$time1), 
+                           min(as.POSIXct(data135$time1),na.rm=TRUE), 
+                           units="days") 
+table(data135$day)
+### ---------- ---------- ---------- ---------- ----------
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+## Seasonal data: including dummies for each hour
+## data135$day = as.Date(data135$time1) 
+## dim(table(data135$day))
+## Seasonal data: including dummies for each hour
+data135$day_ord <- as.numeric(strftime(data135$time, format = "%j"))
+data135$day_ord <- data135$day_ord-(data135$day_ord[1]-1)
+ndummies <- 23
+data135[paste0("seas", 1:ndummies)] <- sapply(1:ndummies, function(i) as.numeric(data135$hour == i))
+nv <- length(data135)
+Ctdummies <- as.matrix(data135[,(nv-ndummies+1):nv]) # Covariates
+```
+
+```{R, echo=FALSE, include=TRUE, eval=TRUE} 
+## MAE: mean absolute error
+MAE_k <- function(obs,est) apply(na.omit(abs(obs-est)),2,mean) 
+
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+plot(data135$time1,data135$t,type="l",col="red",
+     ylim=c(min(data135$t,data135$h,data135$weight_kg),max(data135$t,data135$h,data135$weight_kg)), 
+     main="Bee 135", xlab="time", ylab="Yt")
+lines(data135$time1,data135$h,col="blue")
+lines(data135$time1,data135$weight_kg,col="orange")
+legend("bottomleft",legend=c("t","h","w"),
+       col=c("red","blue","orange"),lty=1,h=4)
+
+```
+
+Rolling-window for cross-validation 
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE}
+## rolling-window for cross-validation
+Nsim <- 11     ### number of windows
+Ntrain <- 90   ### number of days
+Nnew <- 7*24   ### predict
+N <- Ntrain*24 ### fit
+train <-  matrix(numeric(),Nsim,2)
+test <- matrix(numeric(),Nsim,2)
+train[,1] <- 4+7*(0:(Nsim-1))
+train[,2] <- train[,1]+Ntrain-1
+test[,1] <- train[ ,2]+1
+test[,2] = test[,1]+7-1
+cbind(train,test)
+### ---------- ---------- ---------- ---------- ----------
+## MCMC options
+options(mc.cores = parallel::detectCores())
+chains=2 ## chains
+it_burnin = 300 ## burnin
+it_sample = 600 ## sample
+### ---------- ---------- ---------- ---------- ----------
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE}
+### ---------- ---------- ---------- ---------- ----------
+## Subset
+sim <- 10  
+day_sim <- which(data135$day_ord>=train[sim,1] & data135$day_ord<=test[sim,2])
+sub135 <- data135[day_sim,]  
+subCtdummy <- Ctdummies[day_sim,]  
+
+### ---------- ---------- ---------- ---------- ----------
+
+## vector time series: (t,h,w)
+## (time, humidity, weight)
+Yfull = matrix(rep(NA,3*(N+Nnew)),nrow=(N+Nnew),byrow=TRUE)
+
+## for standardized data
+t.mn = mean(sub135$t); t.sd = sd(sub135$t); 
+h.mn = mean(sub135$h); h.sd = sd(sub135$h); 
+w.mn = mean(sub135$weight_kg); w.sd = sd(sub135$weight_kg); 
+Yfull[,1] <- (sub135$t - t.mn)/t.sd 
+Yfull[,2] <- (sub135$h - h.mn)/h.sd 
+Yfull[,3] <- (sub135$weight_kg - w.mn)/w.sd 
+
+## Exogenous variables
+Ctfull <- cbind(sub135$t_o, subCtdummy)
+
+### Training and Testing Sets
+Y = Yfull[1:N,]
+Ypred = Yfull[N+1:Nnew,]
+Y_obs = Y
+Ct <- as.matrix(Ctfull[1:N,])
+Ct_test <- as.matrix(Ctfull[N+(1:Nnew),])
+M <- ncol(Ct)
+
+### ---------- ---------- ---------- ---------- ----------
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+plot(Y_obs[,1],type="l",col="red",
+     ylim=c(min(Y,na.rm=TRUE),max(Y,na.rm=TRUE)),xlim=c(1,(N+Nnew)), 
+     main=paste("Bee 135 standardized, rolling-window",sim), xlab="t",ylab="Yt")
+lines(Y_obs[,2],col="blue")
+lines(Y_obs[,3],col="orange")
+lines(N+1:Nnew,Yfull[N+1:Nnew,1],col="red",lty=3)
+lines(N+1:Nnew,Yfull[N+1:Nnew,2],col="blue",lty=3)
+lines(N+1:Nnew,Yfull[N+1:Nnew,3],col="orange",lty=3)
+abline(v=N,col="gray",lty=3)
+legend("bottomleft",legend=c("t","h","w","testing data"),
+       col=c("red","blue","orange", "gray"), lty=c(1,1,1,2), h=5,cex=0.7)
+```
+
+
+# BVARX(p) 
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+P = 2 ## Lag order
+## Data list 
+stan_data_var <- list(N = nrow(Y), ## No. of time periods observed
+                      D = ncol(Y), ## No. of variables in y_t
+                      P = P, ## Lag order
+                      M = ncol(Ct), ## No. of covariates
+                      Y_obs = Y_obs, ## times series vector
+                      Ct = Ct, ## Covariates
+                      Nnew = Nnew, ## No. of time periods for prediction
+                      Ct_test = Ct_test ) ## Covariates for prediction
+
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+
+model_stan_var <- stan(file = 'BVARX_p.stan', data=stan_data_var, 
+                     iter=(it_burnin+it_sample), warmup = it_burnin, 
+                     chains=chains, cores=8)
+
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+traceplot(model_stan_var, inc_warmup=FALSE, pars=c("PHI"),
+          labeller = c(PHI = expression(phi)))
+print(model_stan_var,pars=c("PHI"))
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+stan_trace(model_stan_var, inc_warmup=FALSE, pars=c("MU"))
+print(model_stan_var,pars=c("MU"))
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+stan_trace(model_stan_var, inc_warmup=FALSE, pars=c("Sigma"))
+print(model_stan_var,pars=c("Sigma"))
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE}
+## Fitted and  predicted data
+ext_fit_var <- extract(model_stan_var)
+
+fit_stan_var_med <- apply(ext_fit_var$Y_fit, c(2,3), median)
+fit_stan_var_low <- apply(ext_fit_var$Y_fit, c(2,3), quantile,prob=0.025)
+fit_stan_var_upp <- apply(ext_fit_var$Y_fit, c(2,3), quantile,prob=0.975)
+
+pred_stan_var_med <- apply(ext_fit_var$Y_test, c(2,3), median)
+pred_stan_var_low <- apply(ext_fit_var$Y_test, c(2,3), quantile,prob=0.025)
+pred_stan_var_upp <- apply(ext_fit_var$Y_test, c(2,3), quantile,prob=0.975)
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+## Fitted and predicted data in original scale
+
+unstandardize <- function(v) v*c(t.sd,h.sd,w.sd)+c(t.mn,h.mn,w.mn)
+
+fit_original_med <- t(apply(fit_stan_var_med, 1, unstandardize))
+fit_original_low <- t(apply(fit_stan_var_low, 1, unstandardize))
+fit_original_upp <- t(apply(fit_stan_var_upp, 1, unstandardize))
+
+pred_original_med <- t(apply(pred_stan_var_med, 1, unstandardize))
+pred_original_low <- t(apply(pred_stan_var_low, 1, unstandardize))
+pred_original_upp <- t(apply(pred_stan_var_upp, 1, unstandardize))
+
+```
+
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$t, main=paste0("VAR(",P,")"), type="l",col="black")
+lines(((P+1):N),fit_original_med[,1],col="red")
+legend("top",legend=c("t","t-estimate"),col=c("black","red"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$t[N+1:Nnew], ylab="t", ylim=c(min(sub135$t,na.rm=T),max(sub135$t,na.rm=T)), 
+     main=paste0("VAR(",P,")"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),1],col="red")
+lines(N+1:Nnew,pred_original_low[-c(1:P),1],col="magenta",alpha=2)
+lines(N+1:Nnew,pred_original_upp[-c(1:P),1],col="magenta")
+legend("top",legend=c("t-test","t-test-estimate","CI"),col=c("black","red","magenta"),lty=1,h=3)
+
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$h, main=paste0("VAR(",P,")"), type="l",col=1)
+lines(((P+1):N),fit_original_med[,2],col=4)
+legend("top",legend=c("h","h-estimate"),col=c(1,4),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$h[N+1:Nnew], ylab="h", ylim=c(min(sub135$h,na.rm=T),max(sub135$h,na.rm=T)), 
+     main=paste0("VAR(",P,")"), type="l",col=1)
+lines(N+1:Nnew,pred_original_med[-c(1:P),2],col=4)
+lines(N+1:Nnew,pred_original_low[-c(1:P),2],col="cyan")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),2],col="cyan")
+legend("top",legend=c("h-test","h-test-estimate","CI"),col=c(1,4,"cyan"),lty=1,h=3)
+
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$weight_kg, main=paste0("VAR(",P,")"), type="l",col="black")
+lines(((P+1):N),fit_original_med[,3],col="orange")
+legend("top",legend=c("w","w-estimate"),col=c("black","orange"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$weight_kg[N+1:Nnew], ylab="w", ylim=c(min(sub135$weight_kg,na.rm=T),max(sub135$weight_kg,na.rm=T)), 
+     main=paste0("VAR(",P,")"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),3],col="orange")
+lines(N+1:Nnew,pred_original_low[-c(1:P),3],col="magenta")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),3],col="magenta")
+legend("top",legend=c("w-test","w-test-estimate","CI"),col=c("black","orange","magenta"),lty=1,h=3)
+
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+### MAE training dataset
+MAE_k(obs=cbind(sub135$t[(P+1):N],sub135$h[(P+1):N],sub135$weight_kg[(P+1):N]), est=fit_original_med)
+### MAE testing dataset
+MAE_k(obs=cbind(sub135$t[N+1:Nnew],sub135$h[N+1:Nnew],sub135$weight_kg[N+1:Nnew]), est=pred_original_med[-c(1:P),])
+```
+
+
+
+
