@@ -73,6 +73,8 @@ model {
    int grainsize=1;
    matrix[N-P,D] eta_aux;
    vector[D] eta[N-P]; 
+
+// Prior
    L_corr_noise ~ lkj_corr_cholesky(2.0);
    sd_noise ~ normal(0,1);
    MU ~ normal(0,1);
@@ -99,6 +101,7 @@ model {
 
 // Generated quantities block
 generated quantities {
+   vector[N-P] log_lik;        // Log-Likelihood
    matrix[D,D] Sigma;          // Covariance 
    vector[D] Y_fit[N-P];       // Fitted time series
    vector[D] eta_fit[N-P];     // Linear predictor for training dataset
@@ -123,4 +126,10 @@ generated quantities {
       }
       Y_test[P+t] = multi_normal_cholesky_rng(eta_test[t],L_sigma);
    }
+
+// Log-Likelihood
+   for(t in 1:(N-P)){
+      log_lik[t] = multi_normal_cholesky_lpdf(Y[t] | eta_fit[t],L_sigma);
+   }
+
 }
