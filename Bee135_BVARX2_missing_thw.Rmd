@@ -1,7 +1,7 @@
 ---
 title: "BVARX(p) - missing data"
 author: "M. Carmen Robustillo, Lizbeth Naranjo, M. Isabel Parra, Carlos J. Perez"
-date: "December 2025"
+date: "July 2026"
 output: 
   pdf_document: 
     latex_engine: xelatex
@@ -90,14 +90,16 @@ Rolling-window for cross-validation
 ## rolling-window for cross-validation
 Nsim <- 11     ### number of windows
 Ntrain <- 90   ### number of days
-Nnew <- 7*24   ### predict
+Ntest <- 7
+
+Nnew <- Ntest*24   ### predict
 N <- Ntrain*24 ### fit
 train <-  matrix(numeric(),Nsim,2)
 test <- matrix(numeric(),Nsim,2)
-train[,1] <- 4+7*(0:(Nsim-1))
+train[,1] <- 4+Ntest*(0:(Nsim-1))
 train[,2] <- train[,1]+Ntrain-1
 test[,1] <- train[ ,2]+1
-test[,2] = test[,1]+7-1
+test[,2] = test[,1]+Ntest-1
 cbind(train,test)
 ### ---------- ---------- ---------- ---------- ----------
 ## MCMC options
@@ -121,15 +123,17 @@ subCtdummy <- Ctdummies[day_sim,]
 ## vector time series: (t,h,w)
 ## (time, humidity, weight)
 Yfull = matrix(rep(NA,3*(N+Nnew)),nrow=(N+Nnew),byrow=TRUE)
+Yfull[,1] <- sub135$t 
+Yfull[,2] <- sub135$h 
+Yfull[,3] <- sub135$weight_kg 
 
-## for standardized data
-t.mn = mean(sub135$t); t.sd = sd(sub135$t); 
-h.mn = mean(sub135$h); h.sd = sd(sub135$h); 
-w.mn = mean(sub135$weight_kg); w.sd = sd(sub135$weight_kg); 
-Yfull[,1] <- (sub135$t - t.mn)/t.sd 
-Yfull[,2] <- (sub135$h - h.mn)/h.sd 
-Yfull[,3] <- (sub135$weight_kg - w.mn)/w.sd 
+Y = Yfull[1:N,]
+Ypred = Yfull[N+1:Nnew,]
 
+  Yt_obs = Y[,1]
+  Yh_obs = Y[,2]
+  Yw_obs = Y[,3]
+   
 ## Exogenous variables
 Ctfull <- cbind(sub135$t_o, subCtdummy)
 
@@ -146,33 +150,93 @@ M <- ncol(Ct)
 
 ```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE} 
 ### ---------- ---------- ---------- ---------- ----------
-### Missing data
-set.seed(123)
-perc_mis = 0.1
-nmis = ceiling(perc_mis*N/(24*3))  ### 3 dias complets con datos faltantes
-idmis = sample(c(1:N),size=nmis,replace=FALSE) ### 1=missing, 0=observed
-idmis = idmis[order(idmis)]
-miss = rep(0,N)
-for(i in 1:length(idmis)){
-  miss[idmis[i]+1:(24*3)] = 1
-}
-table(miss)
-Y_obs = Y
-Y_obs[miss==1,] = NA
+## Empirical distribution for missing data  
+## Scenario 2 ##
+################ 
+### ---------- ---------- ---------- ---------- ----------
 
+## 5 temperatures
+xt <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 
+        16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 32, 
+        33, 34, 35, 36, 37, 43, 44, 45, 47, 57, 62, 63, 75, 80, 
+        81, 82, 83, 84, 85, 86, 172, 183, 184, 188, 193, 206, 209, 213, 
+        315, 355, 356, 360, 365)
+pxt <- c(436, 92, 66, 53, 29, 29, 22, 23, 10, 9, 1, 2, 1, 4, 
+         1, 5, 4, 6, 8, 1, 1, 4, 2, 4, 3, 1, 2, 2, 
+         2, 1, 1, 2, 1, 2, 1, 1, 1, 1, 2, 2, 1, 3, 
+         1, 1, 3, 3, 1, 2, 1, 1, 1, 1, 2, 2, 1, 1, 
+         1, 1, 1, 1, 1)
+## Weight
+xw <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 18, 21, 23, 
+        25, 26, 28, 36, 43, 59, 80, 82, 83, 182, 198, 353)
+pxw <- c(75, 21, 12, 12, 5, 6, 6, 4, 3, 3, 1, 3, 1, 1, 1, 3, 
+         1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+## Sensor for humidity, presion y temperature
+xs <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 17, 18, 19, 
+        20, 21, 22, 23, 25, 38, 54, 74, 75, 77, 157, 182, 308)
+pxs <- c(264, 66, 54, 15, 27, 12, 6, 15, 6, 3, 3, 3, 3, 3, 
+         3, 3, 3, 6, 3, 3, 3, 3, 3, 3, 3, 3, 3)
+### ---------- ---------- ---------- ---------- ----------
+
+  set.seed(sim)
+  
+  ## The scale only fails when the other sensor fails.
+  n <- 90*24          # long of the serie
+  p <- 0.3            # proportion of missing data to simulate
+  pc <- p/2           # proportion of common data (scale and sensor)
+  pe <- p*7/6         # proportion of data where only the sensor fails
+  nnac <- trunc(n*pc) # number of common missing values
+  nnat <- trunc(n*pe) # total number of missing sensor values
+  nna <- 0            # number of values removed so far
+  # INITIALIZATION
+  inaw <- rep(FALSE,n) 
+  while (nna<nnac)
+  {
+    i <- sample(n,1)
+    ni <- min(sample(xw,1,prob=pxw),nnac-nna)
+    inaw[i:min(i+ni-1,n)] <- TRUE
+    nna <- sum(inaw)
+  }
+  sum(inaw)
+  nna
+  ina <- inaw
+  while (nna<nnat)
+  {
+    i <- sample(n,1)
+    ni <- min(sample(xs,1,prob=pxs),nnat-nna)
+    ina[i:min(i+ni-1,n)] <- TRUE
+    nna <- sum(ina)
+  }
+  
+### ---------- ---------- ---------- ---------- ----------
+## Missing data
+
+  Yt_obs[ina] = NA
+  Yh_obs[ina] = NA
+  Yw_obs[inaw] = NA
+  
+## for standardized data
+  
+  t.mn = mean(Yt_obs, na.rm=TRUE); t.sd = sd(Yt_obs, na.rm=TRUE);
+  h.mn = mean(Yh_obs, na.rm=TRUE); h.sd = sd(Yh_obs, na.rm=TRUE);
+  w.mn = mean(Yw_obs, na.rm=TRUE); w.sd = sd(Yw_obs, na.rm=TRUE);
+  
+  Yt_obs <- (Yt_obs - t.mn)/t.sd
+  Yh_obs <- (Yh_obs - h.mn)/h.sd
+  Yw_obs <- (Yw_obs - w.mn)/w.sd  
 ```
 
 ```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
-plot(Y_obs[,1],type="l",col="red",
-     ylim=c(min(Y,na.rm=TRUE),max(Y,na.rm=TRUE)),xlim=c(1,(N+Nnew)), 
+plot(Yt_obs,type="l",col="red",
+     ylim=c(-3,3),xlim=c(1,(N+Nnew)), 
      main=paste("Bee 135 standardized, rolling-window",sim), xlab="t",ylab="Yt")
-lines(Y_obs[,2],col="blue")
-lines(Y_obs[,3],col="orange")
-lines(N+1:Nnew,Yfull[N+1:Nnew,1],col="red",lty=3)
-lines(N+1:Nnew,Yfull[N+1:Nnew,2],col="blue",lty=3)
-lines(N+1:Nnew,Yfull[N+1:Nnew,3],col="orange",lty=3)
+lines(Yh_obs,col="blue")
+lines(Yw_obs,col="orange")
+lines(N+1:Nnew,(Yfull[N+1:Nnew,1]- t.mn)/t.sd,col="red",lty=3)
+lines(N+1:Nnew,(Yfull[N+1:Nnew,2]- h.mn)/h.sd,col="blue",lty=3)
+lines(N+1:Nnew,(Yfull[N+1:Nnew,3]- w.mn)/w.sd,col="orange",lty=3)
 abline(v=N,col="green",lty=1)
-points(c(1:N)[is.na(Y_obs[,1])],rep(mean(Y[,1],na.rm=TRUE),sum(miss[])),pch="|",col="black")
+points(c(1:N)[is.na(Yt_obs)],rep(0,sum(is.na(Yt_obs))),pch="|",col="gray")
 legend("bottomleft",legend=c("t","h","w", "missing","testing data"),
        col=c("red","blue","orange", "black","green"), lty=c(1,1,1,1,2), h=5,cex=0.7)
 ```
@@ -183,26 +247,29 @@ legend("bottomleft",legend=c("t","h","w", "missing","testing data"),
 ```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
 P = 2 ## Lag order
 ## Data list 
-stan_data_var_miss <- list(N = nrow(Y), ## No. of time periods observed
-                           D = ncol(Y), ## No. of variables in y_t
-                           P = P, ## Lag order
-                           M = ncol(Ct), ## No. of covariates
-                           Nobs = sum(miss==0), ## No. of observed data
-                           Nmis = sum(miss==1), ##  No. of missing data 
-                           Y_obs = Y_obs[which(miss==0),], ## times series vector
-                           Ct = Ct, ## Covariates
-                           Nnew = Nnew, ## No. of time periods for prediction
-                           Ct_test = Ct_test , ## Covariates for prediction
-                           ii_obs = which(miss==0), ## index for observed data
-                           ii_mis = which(miss==1)) ## index for missing data
+  stan_data_var_miss <- list(N = nrow(Y), ## No. of time periods observed
+                        D = ncol(Y), ## No. of variables in y_t
+                        P = P, ## Lag order
+                        M = ncol(Ct), ## No. of covariates
+                        Nobs1=sum(ina==FALSE), Nobs2=sum(ina==FALSE), Nobs3=sum(inaw==FALSE), ## No. of observed data
+                        Nmis1=sum(ina==TRUE), Nmis2=sum(ina==TRUE), Nmis3=sum(inaw==TRUE), ##  No. of missing data
+                        Yt_obs = Yt_obs[which(ina==FALSE)], ## observed times series vector
+                        Yh_obs = Yh_obs[which(ina==FALSE)], ## observed times series vector
+                        Yw_obs = Yw_obs[which(inaw==FALSE)], ## observed times series vector
+                        Ct = Ct, ## Covariates
+                        Nnew = Nnew, ## No. of time periods for prediction
+                        Ct_test = Ct_test, ## Covariates for prediction
+                        ii_obs1=which(ina==FALSE), ii_obs2=which(ina==FALSE), ii_obs3=which(inaw==FALSE), ## index for observed data
+                        ii_mis1=which(ina==TRUE), ii_mis2=which(ina==TRUE), ii_mis3=which(inaw==TRUE) ) ## index for missing data
 
 ```
 
 ```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
 
-model_stan_var_miss <- stan(file = 'BVARX_p_missing.stan', data=stan_data_var_miss, 
-                     iter=(it_burnin+it_sample), warmup = it_burnin, 
-                     chains=chains, cores=8)
+model_stan_var_miss <- stan(file = 'BVARX_p_missing_inaw.stan', 
+                            data=stan_data_var_miss, 
+                            iter=(it_burnin+it_sample), warmup = it_burnin, 
+                            chains=chains, cores=8)
 
 ```
 
@@ -256,7 +323,7 @@ pred_original_upp <- t(apply(pred_stan_var_upp, 1, unstandardize))
 
 ```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
 plot(sub135$t, main=paste0("VAR(",P,") missing"), type="l",col="black")
-points(c(1:N)[miss==1],rep(min(sub135$t,na.rm=T),sum(miss)),pch="|",col="green")
+points(c(1:N)[ina==TRUE],rep(min(sub135$t,na.rm=T),sum(ina)),pch="|",col="green")
 lines(((P+1):N),fit_original_med[,1],col="red")
 legend("top",legend=c("t","missing","t-estimate"),col=c("black","green","red"),lty=1,h=3)
 
@@ -271,7 +338,7 @@ legend("top",legend=c("t-test","t-test-estimate","CI"),col=c("black","red","mage
 
 ```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
 plot(sub135$h, main=paste0("VAR(",P,") missing"), type="l",col="black")
-points(c(1:N)[miss==1],rep(min(sub135$h,na.rm=T),sum(miss)),pch="|",col="magenta")
+points(c(1:N)[ina==1],rep(min(sub135$h,na.rm=T),sum(ina)),pch="|",col="magenta")
 lines(((P+1):N),fit_original_med[,2],col=4)
 legend("top",legend=c("h","missing","h-estimate"),col=c("black","magenta",4),lty=1,h=3)
 
@@ -286,7 +353,7 @@ legend("top",legend=c("h-test","h-test-estimate","CI"),col=c("black",4,"cyan"),l
 
 ```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
 plot(sub135$weight_kg, main=paste0("VAR(",P,") missing"), type="l",col="black")
-points(c(1:N)[miss==1],rep(min(sub135$weight_kg,na.rm=T),sum(miss)),pch="|",col=4)
+points(c(1:N)[inaw==1],rep(min(sub135$weight_kg,na.rm=T),sum(inaw)),pch="|",col=4)
 lines(((P+1):N),fit_original_med[,3],col="orange")
 legend("top",legend=c("w","missing","w-estimate"),col=c("black",4,"orange"),lty=1,h=3)
 
