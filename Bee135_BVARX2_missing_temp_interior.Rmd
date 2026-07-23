@@ -1,0 +1,397 @@
+---
+title: "BVARX(p) - missing data"
+author: "M. Carmen Robustillo, Lizbeth Naranjo, M. Isabel Parra, Carlos J. Perez"
+date: "December 2025"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+*A Bayesian vector autoregressive approach to address missing data and forecasting in precision beekeeping*
+
+# Bee 135 data
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(devtools)
+library(coda)
+library(rstan)
+library(vars)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, eval=TRUE,include=FALSE,results==FALSE}
+## change address in dir1="HERE" and setwd("HERE")
+dir1 = "~/Documents/Articulos/Abejas_MarkovSwitching/GitHub/" 
+setwd("~/Documents/Articulos/Abejas_MarkovSwitching/GitHub/") 
+
+dataBee <- read.csv(paste0(dir1,"Bee135.csv"), 
+                       row.names=NULL,header=TRUE,sep=";")
+## dim(data135)
+## head(data135)
+## summary(data135)
+
+dataBee <- as.data.frame(dataBee)
+
+### ---------- ---------- ---------- ---------- ----------
+### stational cicle habing dummies for factor
+
+dataBee$time1 <- as.POSIXct(strptime(dataBee$time,format="%Y-%m-%d %H:%M:%S"))
+## Separate day and time
+dataBee$day = as.Date(as.POSIXct(strptime(dataBee$time,format="%Y-%m-%d"))) 
+dataBee$hour = as.character(dataBee$time1)
+dataBee$hour = substr(dataBee$hour,12,13)
+dataBee$hour = as.numeric(dataBee$hour) 
+
+### order by day and hour 
+data135 = dataBee[order(dataBee$day,dataBee$hour),]
+data135 = as.data.frame(data135)
+
+data135$time2 <- difftime(as.POSIXct(data135$time1), 
+                           min(as.POSIXct(data135$time1),na.rm=TRUE), 
+                           units="days") 
+table(data135$day)
+### ---------- ---------- ---------- ---------- ----------
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+## Seasonal data: including dummies for each hour
+## data135$day = as.Date(data135$time1) 
+## dim(table(data135$day))
+## Seasonal data: including dummies for each hour
+data135$day_ord <- as.numeric(strftime(data135$time, format = "%j"))
+data135$day_ord <- data135$day_ord-(data135$day_ord[1]-1)
+ndummies <- 23
+data135[paste0("seas", 1:ndummies)] <- sapply(1:ndummies, function(i) as.numeric(data135$hour == i))
+nv <- length(data135)
+Ctdummies <- as.matrix(data135[,(nv-ndummies+1):nv]) # Covariates
+```
+
+```{R, echo=FALSE, include=TRUE, eval=TRUE} 
+## MAE: mean absolute error
+MAE_k <- function(obs,est) apply(na.omit(abs(obs-est)),2,mean) 
+
+```
+
+
+Rolling-window for cross-validation 
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE}
+## rolling-window for cross-validation
+Nsim <- 11     ### number of windows
+Ntrain <- 90   ### number of days
+Ntest <- 7
+
+Nnew <- Ntest*24   ### predict
+N <- Ntrain*24 ### fit
+train <-  matrix(numeric(),Nsim,2)
+test <- matrix(numeric(),Nsim,2)
+train[,1] <- 4+Ntest*(0:(Nsim-1))
+train[,2] <- train[,1]+Ntrain-1
+test[,1] <- train[ ,2]+1
+test[,2] = test[,1]+Ntest-1
+cbind(train,test)
+### ---------- ---------- ---------- ---------- ----------
+## MCMC options
+options(mc.cores = parallel::detectCores())
+chains=2 ## chains
+it_burnin = 300 ## burnin
+it_sample = 600 ## sample
+### ---------- ---------- ---------- ---------- ----------
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE}
+### ---------- ---------- ---------- ---------- ----------
+## Subset
+sim <- 10 
+day_sim <- which(data135$day_ord>=train[sim,1] & data135$day_ord<=test[sim,2])
+sub135 <- data135[day_sim,]  
+subCtdummy <- Ctdummies[day_sim,]  
+
+### ---------- ---------- ---------- ---------- ----------
+
+## vector time series: (t,h,w)
+## (time, humidity, weight)
+  
+ Yfull = matrix(rep(NA,5*(N+Nnew)),nrow=(N+Nnew),byrow=TRUE)
+  
+  
+  Yfull[,1] <- sub135$t_i_1 
+  Yfull[,2] <- sub135$t_i_2 
+  Yfull[,3] <- sub135$t_i_3 
+  Yfull[,4] <- sub135$t_i_4 
+  Yfull[,5] <- sub135$t_i_5 
+ 
+## Exogenous variables
+Ctfull <- cbind(sub135$t_o, subCtdummy)
+
+### Training and Testing Sets
+Y = Yfull[1:N,]
+Ypred = Yfull[N+1:Nnew,]
+Y_obs = Y
+Ct <- as.matrix(Ctfull[1:N,])
+Ct_test <- as.matrix(Ctfull[N+(1:Nnew),])
+M <- ncol(Ct)
+
+### ---------- ---------- ---------- ---------- ----------
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+  plot(Yfull[,1],type="l",col=1,ylim=c(min(Yfull,na.rm=TRUE),max(Yfull,na.rm=TRUE)),
+       main="Bee X135")
+  lines(Yfull[,2],col=2)
+  lines(Yfull[,3],col=3)
+  lines(Yfull[,4],col=4)
+  lines(Yfull[,5],col=5)
+  legend("bottom",legend=c("ti1","ti2","ti3","ti4","ti5","missing"),
+         col=c(1,2,3,4,5, 6),lty=1,h=6,cex=0.7)
+  
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE} 
+### ---------- ---------- ---------- ---------- ----------
+## Empirical distribution for missing data  
+## Scenario 1 ##
+################ 
+### ---------- ---------- ---------- ---------- ----------
+
+## 5 temperatures
+xt <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 
+        16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 32, 
+        33, 34, 35, 36, 37, 43, 44, 45, 47, 57, 62, 63, 75, 80, 
+        81, 82, 83, 84, 85, 86, 172, 183, 184, 188, 193, 206, 209, 213, 
+        315, 355, 356, 360, 365)
+pxt <- c(436, 92, 66, 53, 29, 29, 22, 23, 10, 9, 1, 2, 1, 4, 
+         1, 5, 4, 6, 8, 1, 1, 4, 2, 4, 3, 1, 2, 2, 
+         2, 1, 1, 2, 1, 2, 1, 1, 1, 1, 2, 2, 1, 3, 
+         1, 1, 3, 3, 1, 2, 1, 1, 1, 1, 2, 2, 1, 1, 
+         1, 1, 1, 1, 1)
+## Weight
+xw <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 18, 21, 23, 
+        25, 26, 28, 36, 43, 59, 80, 82, 83, 182, 198, 353)
+pxw <- c(75, 21, 12, 12, 5, 6, 6, 4, 3, 3, 1, 3, 1, 1, 1, 3, 
+         1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+## Sensor for humidity, presion y temperature
+xs <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 17, 18, 19, 
+        20, 21, 22, 23, 25, 38, 54, 74, 75, 77, 157, 182, 308)
+pxs <- c(264, 66, 54, 15, 27, 12, 6, 15, 6, 3, 3, 3, 3, 3, 
+         3, 3, 3, 6, 3, 3, 3, 3, 3, 3, 3, 3, 3)
+### ---------- ---------- ---------- ---------- ----------
+  set.seed(sim)
+  
+  n <- Ntrain*24    # long of the time series #4094
+  p <- 0.30         # proportion of missing data to simulate
+  nnat <- trunc(n*p) # number of missing values to simulate
+  # INITIALIZATION
+  ina <- rep(FALSE,n) 
+  nna <- 0 
+  while (nna<nnat)
+  {
+    i <- sample(n,1)
+    ni <- min(sample(xt,1,prob=pxt),nnat-nna)
+    ina[i:min(i+ni-1,n)] <- TRUE
+    nna <- sum(ina)
+  }
+### ---------- ---------- ---------- ---------- ----------
+
+    Y[ina,] = NA
+  Y_obs = Y
+  
+  t1.mn = mean(Y_obs[,1], na.rm=TRUE); t1.sd = sd(Y_obs[,1], na.rm=TRUE);
+  t2.mn = mean(Y_obs[,2], na.rm=TRUE); t2.sd = sd(Y_obs[,2], na.rm=TRUE);
+  t3.mn = mean(Y_obs[,3], na.rm=TRUE); t3.sd = sd(Y_obs[,3], na.rm=TRUE);
+  t4.mn = mean(Y_obs[,4], na.rm=TRUE); t4.sd = sd(Y_obs[,4], na.rm=TRUE);
+  t5.mn = mean(Y_obs[,5], na.rm=TRUE); t5.sd = sd(Y_obs[,5], na.rm=TRUE);
+  
+  Y_obs[,1] <- (Y_obs[,1] - t1.mn)/t1.sd
+  Y_obs[,2] <- (Y_obs[,2] - t2.mn)/t2.sd
+  Y_obs[,3] <- (Y_obs[,3] - t3.mn)/t3.sd
+  Y_obs[,4] <- (Y_obs[,4] - t4.mn)/t4.sd
+  Y_obs[,5] <- (Y_obs[,5] - t5.mn)/t5.sd
+  
+  
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+  plot(Y_obs[,1],type="l",col=1,ylim=c(min(Y_obs,na.rm=TRUE),max(Y_obs,na.rm=TRUE)),
+       main="Bee X135")
+  lines(Y_obs[,2],col=2)
+  lines(Y_obs[,3],col=3)
+  lines(Y_obs[,4],col=4)
+  lines(Y_obs[,5],col=5)
+  points(ifelse(ina==TRUE,0,NA),pch="|",col=6)
+  legend("bottom",legend=c("ti1","ti2","ti3","ti4","ti5","missing"),
+         col=c(1,2,3,4,5, 6),lty=1,h=6,cex=0.7)
+  
+```
+
+
+# BVARX(p) - missing data
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+P = 2 ## Lag order
+## Data list 
+  stan_data_var_miss <- list(N = nrow(Y), ## No. of time periods observed
+                        D = ncol(Y), ## No. of variables in y_t
+                        P = P, ## Lag order
+                        M = ncol(Ct), ## No. of covariates
+                        Nobs=sum(ina==FALSE), Nmis=sum(ina==TRUE), 
+                        Y_obs = Y_obs[which(ina==FALSE),], ## observed times series vector
+                        Ct = Ct, ## Covariates
+                        Nnew = Nnew, ## No. of time periods for prediction
+                        Ct_test = Ct_test,
+                        ii_obs=which(ina==FALSE), ii_mis=which(ina==TRUE) ) ## Covariates for prediction
+
+
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+
+model_stan_var_miss <- stan(file = 'BVARX_p_missing.stan', 
+                            data=stan_data_var_miss, 
+                            iter=(it_burnin+it_sample), warmup = it_burnin, 
+                            chains=chains, cores=8)
+
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+traceplot(model_stan_var_miss, inc_warmup=FALSE, pars=c("PHI"),
+          labeller = c(PHI = expression(phi)))
+print(model_stan_var_miss,pars=c("PHI"))
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+stan_trace(model_stan_var_miss, inc_warmup=FALSE, pars=c("MU"))
+print(model_stan_var_miss,pars=c("MU"))
+```
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="100%", warning=FALSE, message=FALSE}
+stan_trace(model_stan_var_miss, inc_warmup=FALSE, pars=c("Sigma"))
+print(model_stan_var_miss,pars=c("Sigma"))
+```
+
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE}
+## Fitted and  predicted data
+ext_fit_var_miss <- extract(model_stan_var_miss)
+
+fit_stan_var_med <- apply(ext_fit_var_miss$Y_fit, c(2,3), median)
+fit_stan_var_low <- apply(ext_fit_var_miss$Y_fit, c(2,3), quantile,prob=0.025)
+fit_stan_var_upp <- apply(ext_fit_var_miss$Y_fit, c(2,3), quantile,prob=0.975)
+
+pred_stan_var_med <- apply(ext_fit_var_miss$Y_test, c(2,3), median)
+pred_stan_var_low <- apply(ext_fit_var_miss$Y_test, c(2,3), quantile,prob=0.025)
+pred_stan_var_upp <- apply(ext_fit_var_miss$Y_test, c(2,3), quantile,prob=0.975)
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+## Fitted and predicted data in original scale
+
+data.mn.sd = data.frame("t1.mn"=t1.mn, "t1.sd"=t1.sd, "t2.mn"=t2.mn, "t2.sd"=t2.sd,
+                        "t3.mn"=t3.mn, "t3.sd"=t3.sd, "t4.mn"=t4.mn, "t4.sd"=t4.sd,
+                        "t5.mn"=t5.mn, "t5.sd"=t5.sd)
+
+unstandardize <- function(v) v*c(t1.sd,t2.sd,t3.sd,t4.sd,t5.sd)+c(t1.mn,t2.mn,t3.mn,t4.mn,t5.mn)
+
+fit_original_med <- t(apply(fit_stan_var_med, 1, unstandardize))
+fit_original_low <- t(apply(fit_stan_var_low, 1, unstandardize))
+fit_original_upp <- t(apply(fit_stan_var_upp, 1, unstandardize))
+
+pred_original_med <- t(apply(pred_stan_var_med, 1, unstandardize))
+pred_original_low <- t(apply(pred_stan_var_low, 1, unstandardize))
+pred_original_upp <- t(apply(pred_stan_var_upp, 1, unstandardize))
+
+```
+
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$t_i_1, ylab="t_i_1", main=paste0("VAR(",P,") missing"), type="l",col="black")
+points(c(1:N)[ina==TRUE],rep(min(sub135$t_i_1,na.rm=T),sum(ina)),pch="|",col="gray")
+lines(((P+1):N),fit_original_med[,1],col="red")
+legend("top",legend=c("t","missing","t-estimate"),col=c("black","gray","red"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$t_i_1[N+1:Nnew], ylab="t_i_1", ylim=c(min(sub135$t_i_1,na.rm=T),max(sub135$t_i_1,na.rm=T)), 
+     main=paste0("VAR(",P,") missing"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),1],col="red")
+lines(N+1:Nnew,pred_original_low[-c(1:P),1],col="magenta")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),1],col="magenta")
+legend("top",legend=c("ti1-test","ti1-test-estimate","CI"),col=c("black","red","magenta"),lty=1,h=3)
+
+```
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$t_i_2, ylab="t_i_2", main=paste0("VAR(",P,") missing"), type="l",col="black")
+points(c(1:N)[ina==TRUE],rep(min(sub135$t_i_2,na.rm=T),sum(ina)),pch="|",col="gray")
+lines(((P+1):N),fit_original_med[,1],col="blue")
+legend("top",legend=c("t","missing","t-estimate"),col=c("black","gray","blue"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$t_i_2[N+1:Nnew], ylab="t_i_2", ylim=c(min(sub135$t_i_2,na.rm=T),max(sub135$t_i_2,na.rm=T)), 
+     main=paste0("VAR(",P,") missing"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),1],col="blue")
+lines(N+1:Nnew,pred_original_low[-c(1:P),1],col="cyan")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),1],col="cyan")
+legend("top",legend=c("ti1-test","ti1-test-estimate","CI"),col=c("black","blue","cyan"),lty=1,h=3)
+
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$t_i_3, ylab="t_i_3", main=paste0("VAR(",P,") missing"), type="l",col="black")
+points(c(1:N)[ina==TRUE],rep(min(sub135$t_i_3,na.rm=T),sum(ina)),pch="|",col="gray")
+lines(((P+1):N),fit_original_med[,1],col="violet")
+legend("top",legend=c("t","missing","t-estimate"),col=c("black","gray","violet"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$t_i_3[N+1:Nnew], ylab="t_i_3", ylim=c(min(sub135$t_i_3,na.rm=T),max(sub135$t_i_3,na.rm=T)), 
+     main=paste0("VAR(",P,") missing"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),1],col="violet")
+lines(N+1:Nnew,pred_original_low[-c(1:P),1],col="orange")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),1],col="orange")
+legend("top",legend=c("ti1-test","ti1-test-estimate","CI"),col=c("black","violet","orange"),lty=1,h=3)
+
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$t_i_4, ylab="t_i_4", main=paste0("VAR(",P,") missing"), type="l",col="black")
+points(c(1:N)[ina==TRUE],rep(min(sub135$t_i_4,na.rm=T),sum(ina)),pch="|",col="gray")
+lines(((P+1):N),fit_original_med[,1],col="blue")
+legend("top",legend=c("t","missing","t-estimate"),col=c("black","gray","blue"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$t_i_4[N+1:Nnew], ylab="t_i_4", ylim=c(min(sub135$t_i_4,na.rm=T),max(sub135$t_i_4,na.rm=T)), 
+     main=paste0("VAR(",P,") missing"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),1],col="blue")
+lines(N+1:Nnew,pred_original_low[-c(1:P),1],col="green")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),1],col="green")
+legend("top",legend=c("ti1-test","ti1-test-estimate","CI"),col=c("black","blue","green"),lty=1,h=3)
+
+```
+
+
+```{r, echo=FALSE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+plot(sub135$t_i_4, ylab="t_i_5", main=paste0("VAR(",P,") missing"), type="l",col="black")
+points(c(1:N)[ina==TRUE],rep(min(sub135$t_i_5,na.rm=T),sum(ina)),pch="|",col="gray")
+lines(((P+1):N),fit_original_med[,1],col="red")
+legend("top",legend=c("t","missing","t-estimate"),col=c("black","gray","red"),lty=1,h=3)
+
+plot(N+1:Nnew, sub135$t_i_5[N+1:Nnew], ylab="t_i_5", ylim=c(min(sub135$t_i_5,na.rm=T),max(sub135$t_i_5,na.rm=T)), 
+     main=paste0("VAR(",P,") missing"), type="l",col="black")
+lines(N+1:Nnew,pred_original_med[-c(1:P),1],col="red")
+lines(N+1:Nnew,pred_original_low[-c(1:P),1],col="green")
+lines(N+1:Nnew,pred_original_upp[-c(1:P),1],col="green")
+legend("top",legend=c("ti1-test","ti1-test-estimate","CI"),col=c("black","red","green"),lty=1,h=3)
+
+```
+
+
+```{r, echo=TRUE, eval=TRUE, fig.show="hold", include=TRUE, out.width="50%", warning=FALSE, message=FALSE} 
+### MAE training dataset
+MAE_k(obs=Yfull[(P+1):N,], est=fit_original_med)
+### MAE testing dataset
+MAE_k(obs=Yfull[N+1:Nnew], est=pred_original_med[-c(1:P),])
+```
+
+
+
