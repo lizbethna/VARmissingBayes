@@ -10,9 +10,9 @@ Authors: M. Carmen Robustillo (1), Lizbeth Naranjo (2), M. Isabel Parra (3), Car
 
 (3) Departamento de Matematicas, Universidad de Extremadura, Caceres, Spain.
 
-Journal:
+Journal: Applied Soft Computing Journal
 
-Year:
+Year: 2026
 
 ##--------------------------------------------------
 
